@@ -1,0 +1,14 @@
+{
+  "name": "hanafuda-koikoi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Two-player Hanafuda Koi-Koi (web + server)",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.17.0"
+  }
+}

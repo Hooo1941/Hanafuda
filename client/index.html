@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>花札 こいこい - Hanafuda Koi-Koi</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 连接状态 -->
+    <div id="connection-status" class="status-bar">
+      <span id="status-text">等待开始...</span>
+    </div>
+
+    <!-- 规则设置界面 -->
+    <div id="rules-setup-screen" class="screen">
+      <div class="waiting-content">
+        <h1>🌸 花札 こいこい 🌸</h1>
+        
+        <!-- 游戏规则设置 -->
+        <div class="rules-panel">
+          <h3>游戏规则设置</h3>
+          
+          <div class="rule-option">
+            <label>
+              <input type="checkbox" id="rule-hanami-tsukimi" checked>
+              <span>启用花见酒和月见酒</span>
+            </label>
+          </div>
+          
+          <div class="rule-option">
+            <label>先手规则：</label>
+            <select id="rule-first-player">
+              <option value="rotate">轮换（每回合交替）</option>
+              <option value="winner">赢的先手</option>
+              <option value="loser">输的先手</option>
+            </select>
+          </div>
+          
+          <div class="rule-option">
+            <label>こいこい倍数规则：</label>
+            <select id="rule-koikoi-multiplier">
+              <option value="self">自己倍数+1</option>
+              <option value="opponent">对方倍数+1</option>
+              <option value="none">都不加倍</option>
+            </select>
+          </div>
+          
+          <button id="start-matchmaking-btn" class="btn btn-primary btn-large">开始匹配</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 等待房间 -->
+    <div id="waiting-room" class="screen" style="display: none;">
+      <div class="waiting-content">
+        <h1>🌸 花札 こいこい 🌸</h1>
+        <p class="waiting-message">等待对手加入...</p>
+        
+        <!-- 显示已选择的规则 -->
+        <div id="selected-rules" class="rules-display"></div>
+        
+        <div class="spinner"></div>
+      </div>
+    </div>
+
+    <!-- 游戏界面 -->
+    <div id="game-screen" class="screen" style="display: none;">
+      <div class="game-layout">
+        <!-- 左侧主游戏区 -->
+        <div class="main-game-area">
+          <!-- 顶部：双方得分信息 -->
+          <div class="scores-area">
+            <div class="player-score-box you">
+              <div class="player-label">你</div>
+              <div class="score-row">
+                <span class="score-label">本回合:</span>
+                <span id="player-round-score" class="score-value">0</span>
+              </div>
+              <div class="score-row">
+                <span class="score-label">总分:</span>
+                <span id="player-total-score" class="score-value">0</span>
+              </div>
+              <div class="multiplier-row">
+                <span class="multiplier-label">倍数:</span>
+                <span id="player-multiplier" class="multiplier-value">1</span>倍
+              </div>
+              <div class="yaku-display" id="player-yaku-display"></div>
+            </div>
+            
+            <div class="vs-divider">VS</div>
+            
+            <div class="player-score-box opponent">
+              <div class="player-label">对手</div>
+              <div class="score-row">
+                <span class="score-label">本回合:</span>
+                <span id="opponent-round-score" class="score-value">0</span>
+              </div>
+              <div class="score-row">
+                <span class="score-label">总分:</span>
+                <span id="opponent-total-score" class="score-value">0</span>
+              </div>
+              <div class="multiplier-row">
+                <span class="multiplier-label">倍数:</span>
+                <span id="opponent-multiplier" class="multiplier-value">1</span>倍
+              </div>
+              <div class="score-row">
+                <span class="score-label">手牌:</span>
+                <span id="opponent-hand-count" class="score-value">0</span>张
+              </div>
+              <div class="yaku-display" id="opponent-yaku-display"></div>
+            </div>
+          </div>
+
+          <!-- 场地区域（牌堆和场牌） -->
+          <div class="field-area">
+            <div class="field-info">
+              <div class="deck-info">
+                <div class="deck-icon">🎴</div>
+                <div>牌堆: <span id="deck-count">0</span>张</div>
+              </div>
+              <div class="turn-indicator" id="turn-indicator">
+                等待开始...
+              </div>
+            </div>
+            <div class="field-cards" id="field-cards"></div>
+          </div>
+
+          <!-- 手牌区域 -->
+          <div class="hand-area">
+            <div class="hand-header">你的手牌</div>
+            <div class="hand-cards" id="hand-cards"></div>
+          </div>
+
+          <!-- 获得牌区域（左右分布） -->
+          <div class="captures-area">
+            <!-- 玩家获得牌（左侧） -->
+            <div class="player-captures">
+              <div class="captures-header">你的获得牌</div>
+              <div class="captures-container">
+                <div class="captures-section">
+                  <div class="captures-label">光 <span id="player-hikari-count">0</span></div>
+                  <div class="captures" id="player-captures-hikari"></div>
+                </div>
+                <div class="captures-section">
+                  <div class="captures-label">种 <span id="player-tane-count">0</span></div>
+                  <div class="captures" id="player-captures-tane"></div>
+                </div>
+                <div class="captures-section">
+                  <div class="captures-label">短 <span id="player-tanzaku-count">0</span></div>
+                  <div class="captures" id="player-captures-tanzaku"></div>
+                </div>
+                <div class="captures-section">
+                  <div class="captures-label">滓 <span id="player-kasu-count">0</span></div>
+                  <div class="captures" id="player-captures-kasu"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 对手获得牌（右侧） -->
+            <div class="opponent-captures">
+              <div class="captures-header">对手的获得牌</div>
+              <div class="captures-container">
+                <div class="captures-section">
+                  <div class="captures-label">光 <span id="opponent-hikari-count">0</span></div>
+                  <div class="captures" id="opponent-captures-hikari"></div>
+                </div>
+                <div class="captures-section">
+                  <div class="captures-label">种 <span id="opponent-tane-count">0</span></div>
+                  <div class="captures" id="opponent-captures-tane"></div>
+                </div>
+                <div class="captures-section">
+                  <div class="captures-label">短 <span id="opponent-tanzaku-count">0</span></div>
+                  <div class="captures" id="opponent-captures-tanzaku"></div>
+                </div>
+                <div class="captures-section">
+                  <div class="captures-label">滓 <span id="opponent-kasu-count">0</span></div>
+                  <div class="captures" id="opponent-captures-kasu"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右侧信息面板 -->
+        <div class="info-panel">
+          <h3 class="info-panel-title">操作记录</h3>
+          
+          <!-- 合并的操作历史 -->
+          <div class="action-history" id="merged-history">
+            <div class="history-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Koi-Koi 决策对话框 -->
+    <div id="koikoi-modal" class="modal" style="display: none;">
+      <div class="modal-content">
+        <h2>🎉 役成立！</h2>
+        <div id="yaku-list" class="yaku-list"></div>
+        <div class="multiplier-info">
+          当前倍数: <span id="koikoi-multiplier">1</span>倍
+        </div>
+        <div class="total-points">
+          本次得分: <span id="koikoi-points">0</span>点
+        </div>
+        <div class="koikoi-buttons">
+          <button id="koikoi-continue" class="btn btn-primary">こいこい！(继续，倍数+1)</button>
+          <button id="koikoi-end" class="btn btn-success">胜利！(结束回合)</button>
+        </div>
+        <p class="koikoi-hint">选择"こいこい"继续游戏争取更高分数，倍数会+1！但对手也可能反超！</p>
+      </div>
+    </div>
+
+    <!-- 回合结束对话框 -->
+    <div id="round-end-modal" class="modal" style="display: none;">
+      <div class="modal-content">
+        <div id="winner-announcement" class="winner-announcement">🎉 你赢了！🎉</div>
+        <div class="round-number">第 <span id="modal-round-number">1</span> 回合结束</div>
+        <div class="round-results">
+          <div class="player-result">
+            <h3>你的役</h3>
+            <div id="player-yakus" class="yaku-list"></div>
+            <div class="multiplier">倍数: ×<span id="player-round-multiplier">1</span></div>
+            <div class="points">本回合得分: <span id="player-round-points">0</span>点</div>
+          </div>
+          <div class="player-result">
+            <h3>对手的役</h3>
+            <div id="opponent-yakus" class="yaku-list"></div>
+            <div class="multiplier">倍数: ×<span id="opponent-round-multiplier">1</span></div>
+            <div class="points">本回合得分: <span id="opponent-round-points">0</span>点</div>
+          </div>
+        </div>
+        <div class="total-scores-display">
+          <div class="total-score-item">
+            <div class="total-score-label">你的总分</div>
+            <div class="total-score-value" id="modal-player-total-score">0</div>
+          </div>
+          <div class="total-score-divider">VS</div>
+          <div class="total-score-item">
+            <div class="total-score-label">对手总分</div>
+            <div class="total-score-value" id="modal-opponent-total-score">0</div>
+          </div>
+        </div>
+        <div class="round-end-buttons">
+          <button id="play-again-btn" class="btn btn-success btn-large">🌸 再来一局 🌸</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 选择场上牌的对话框 -->
+    <div id="select-field-modal" class="modal" style="display: none;">
+      <div class="modal-content">
+        <h3>选择要配对的场牌</h3>
+        <div id="field-card-options" class="card-options"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 卡牌动画层 -->
+  <div id="card-animation-layer" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 999;"></div>
+
+  <script src="client.js"></script>
+</body>
+</html>
