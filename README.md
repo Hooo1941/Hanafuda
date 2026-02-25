@@ -176,17 +176,25 @@ npm start
 ## 项目结构
 
 ```
-花牌/
+Hanafuda/
 ├── server/
 │   ├── index.js          # WebSocket服务器和路由
 │   └── game.js           # 游戏逻辑核心
 ├── client/
+│   ├── cards/
+│   │   ├── numbers/      # 带数字的SVG卡牌图片
+│   │   └── noNumbers/    # 无数字的SVG卡牌图片
 │   ├── index.html        # 游戏界面
 │   ├── style.css         # 样式表
 │   └── client.js         # 客户端逻辑
 ├── package.json          # 项目配置
-└── README.md            # 本文件
+├── README.md             # 本文件
 ```
+
+## 致谢
+
+- 卡牌SVG图片来自 [SheldonSChen/hanafuda](https://github.com/SheldonSChen/hanafuda) 项目
+
 ---
 
 **Enjoy the game! こいこい！** 🎴✨
