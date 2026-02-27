@@ -13,55 +13,72 @@
       <span id="status-text">等待开始...</span>
     </div>
 
-    <!-- 规则设置界面 -->
-    <div id="rules-setup-screen" class="screen">
+    <!-- 首页/等待房间 -->
+    <div id="waiting-room" class="screen">
       <div class="waiting-content">
         <h1>🌸 花札 こいこい 🌸</h1>
-        
-        <!-- 游戏规则设置 -->
-        <div class="rules-panel">
-          <h3>游戏规则设置</h3>
-          
-          <div class="rule-option">
-            <label>
-              <input type="checkbox" id="rule-hanami-tsukimi" checked>
-              <span>启用花见酒和月见酒</span>
-            </label>
-          </div>
-          
-          <div class="rule-option">
-            <label>先手规则：</label>
-            <select id="rule-first-player">
-              <option value="rotate">轮换（每回合交替）</option>
-              <option value="winner">赢的先手</option>
-              <option value="loser">输的先手</option>
-            </select>
-          </div>
-          
-          <div class="rule-option">
-            <label>こいこい倍数规则：</label>
-            <select id="rule-koikoi-multiplier">
-              <option value="self">自己倍数+1</option>
-              <option value="opponent">对方倍数+1</option>
-              <option value="none">都不加倍</option>
-            </select>
-          </div>
-          
-          <button id="start-matchmaking-btn" class="btn btn-primary btn-large">开始匹配</button>
-        </div>
-      </div>
-    </div>
 
-    <!-- 等待房间 -->
-    <div id="waiting-room" class="screen" style="display: none;">
-      <div class="waiting-content">
-        <h1>🌸 花札 こいこい 🌸</h1>
-        <p class="waiting-message">等待对手加入...</p>
-        
-        <!-- 显示已选择的规则 -->
-        <div id="selected-rules" class="rules-display"></div>
-        
-        <div class="spinner"></div>
+        <!-- 匹配前：入口选择 -->
+        <div id="pre-match-panel">
+          <div class="entry-panel">
+            <button id="start-matchmaking-btn" class="btn btn-primary btn-large">开始匹配</button>
+            <div class="entry-divider">或</div>
+            <button id="create-room-btn" class="btn btn-secondary btn-large">创建私密房间</button>
+            <div class="join-room-row">
+              <input type="text" id="join-room-input" class="room-input" placeholder="输入房间号" maxlength="6" />
+              <button id="join-room-btn" class="btn btn-secondary">加入私密房间</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 匹配中/等待对手 -->
+        <div id="waiting-panel" style="display:none;">
+          <div id="room-code-display" style="display:none;" class="room-code-display">
+            <div class="room-code-label">房间号</div>
+            <div class="room-code-value" id="room-code-value">------</div>
+            <div class="room-code-hint">将房间号发给朋友，等待对方加入</div>
+          </div>
+          <p class="waiting-message" id="waiting-message">等待对手加入...</p>
+          <div class="spinner"></div>
+        </div>
+
+        <!-- 房主规则设置面板（等到双方都进房间后显示） -->
+        <div id="rules-setup-panel" style="display:none;">
+          <div class="rules-panel">
+            <h3 id="rules-panel-title">游戏规则设置</h3>
+
+            <div class="rule-option">
+              <label>
+                <input type="checkbox" id="rule-hanami-tsukimi" checked>
+                <span>启用花见酒和月见酒</span>
+              </label>
+            </div>
+
+            <div class="rule-option">
+              <label>先手规则：</label>
+              <select id="rule-first-player">
+                <option value="rotate">轮换（每回合交替）</option>
+                <option value="winner">赢的先手</option>
+                <option value="loser">输的先手</option>
+              </select>
+            </div>
+
+            <div class="rule-option">
+              <label>こいこい倍数规则：</label>
+              <select id="rule-koikoi-multiplier">
+                <option value="self">自己倍数+1</option>
+                <option value="opponent">对方倍数+1</option>
+                <option value="none">都不加倍</option>
+              </select>
+            </div>
+
+            <!-- 房主看到：发送规则按钮 -->
+            <button id="confirm-rules-btn" class="btn btn-primary btn-large" style="display:none;">确认规则，开始游戏</button>
+
+            <!-- 访客看到：等待提示 -->
+            <p id="guest-waiting-rules" style="display:none; color:#888;">等待房主确认规则...</p>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -194,6 +211,12 @@
         <!-- 右侧信息面板 -->
         <div class="info-panel">
           <h3 class="info-panel-title">操作记录</h3>
+
+          <!-- 当局规则摘要 -->
+          <div id="rules-summary" class="rules-summary" style="display:none;">
+            <div class="rules-summary-title">本局规则</div>
+            <div id="rules-summary-content" class="rules-summary-content"></div>
+          </div>
           
           <!-- 合并的操作历史 -->
           <div class="action-history" id="merged-history">

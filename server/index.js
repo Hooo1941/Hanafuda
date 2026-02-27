@@ -18,12 +18,23 @@ const wss = new WebSocket.Server({ server });
 
 // 游戏房间管理
 const games = new Map(); // 正在进行的游戏
+const privateRooms = new Map(); // 私密房间 code -> game（等待第二人加入）
 const reconnectRooms = new Map(); // 等待重连的房间 roomId -> {game, disconnectedPlayerIndex, timestamp}
 const RECONNECT_TIMEOUT = 5 * 60 * 1000; // 5分钟重连超时
 
 // 生成唯一ID
 function generateId() {
   return Math.random().toString(36).substr(2, 9);
+}
+
+// 生成6位大写可读房间码
+function generateRoomCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 去掉易混淆的 0/O/1/I
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return privateRooms.has(code) ? generateRoomCode() : code; // 碰撞重试
 }
 
 // 清理过期的重连房间
@@ -95,8 +106,20 @@ function handleMessage(ws, playerId, message) {
       handleJoinGame(ws, playerId, data.gameRules);
       break;
 
+    case 'create_room':
+      handleCreateRoom(ws, playerId);
+      break;
+
+    case 'join_room':
+      handleJoinRoom(ws, playerId, data.roomCode);
+      break;
+
     case 'rejoin_game':
       handleRejoinGame(ws, playerId, data.roomId, data.oldPlayerId);
+      break;
+
+    case 'start_game':
+      handleStartGame(playerId, data.gameRules);
       break;
 
     case 'play_card':
@@ -128,6 +151,59 @@ function handleMessage(ws, playerId, message) {
   }
 }
 
+function handleCreateRoom(ws, playerId) {
+  const roomCode = generateRoomCode();
+  const roomId = generateId();
+  const game = new HanafudaGame(roomId, {});
+  game.addPlayer(playerId, ws);
+  game.isPrivate = true;
+  game.roomCode = roomCode;
+  privateRooms.set(roomCode, game);
+  games.set(roomId, game);
+
+  console.log(`私密房间创建: ${roomCode} (${roomId})`);
+
+  ws.send(JSON.stringify({
+    type: 'room_created',
+    roomId: roomId,
+    roomCode: roomCode,
+    playerIndex: 0
+  }));
+}
+
+function handleJoinRoom(ws, playerId, roomCode) {
+  const code = (roomCode || '').toUpperCase().trim();
+  const game = privateRooms.get(code);
+
+  if (!game) {
+    ws.send(JSON.stringify({ type: 'join_room_failed', message: '房间号不存在或已开始游戏' }));
+    return;
+  }
+  if (game.players.length >= 2) {
+    ws.send(JSON.stringify({ type: 'join_room_failed', message: '房间已满' }));
+    return;
+  }
+
+  game.addPlayer(playerId, ws);
+  privateRooms.delete(code); // 已满，移出私密等待池
+
+  console.log(`玩家 ${playerId} 加入私密房间: ${code}`);
+
+  ws.send(JSON.stringify({
+    type: 'joined_game',
+    roomId: game.roomId,
+    playerIndex: 1,
+    playersCount: 2
+  }));
+
+  // 通知房主对手已加入
+  broadcastToRoom(game, { type: 'player_joined', playersCount: 2 }, playerId);
+
+  // 双方到齐，进入规则设置
+  game.players[0].ws.send(JSON.stringify({ type: 'setup_rules', isHost: true }));
+  game.players[1].ws.send(JSON.stringify({ type: 'setup_rules', isHost: false }));
+}
+
 function handleJoinGame(ws, playerId, gameRules = {}) {
   // 优先查找等待重连的房间
   let reconnectData = null;
@@ -155,7 +231,8 @@ function handleJoinGame(ws, playerId, gameRules = {}) {
       roomId: game.roomId,
       playerIndex: emptyPlayerIndex,
       playersCount: 2,
-      reconnected: true
+      reconnected: true,
+      gameRules: game.gameRules
     }));
     
     // 通知另一位玩家对手已回来
@@ -179,8 +256,8 @@ function handleJoinGame(ws, playerId, gameRules = {}) {
     return;
   }
   
-  // 没有等待重连的房间，查找等待中的普通游戏或创建新游戏
-  let game = Array.from(games.values()).find(g => g.gameState === 'waiting' && g.players.length < 2);
+  // 没有等待重连的房间，查找等待中的公开游戏或创建新游戏
+  let game = Array.from(games.values()).find(g => g.gameState === 'waiting' && g.players.length < 2 && !g.isPrivate);
 
   if (!game) {
     // 创建新游戏，传入游戏规则
@@ -207,17 +284,21 @@ function handleJoinGame(ws, playerId, gameRules = {}) {
       playersCount: game.players.length
     }, playerId);
 
-    // 如果两个玩家都准备好了，开始游戏
+    // 如果两个玩家都准备好了，进入规则设置阶段
     if (game.players.length === 2) {
-      game.startGame();
-      console.log(`游戏开始: ${game.roomId}`);
+      console.log(`双方已到齐，等待房主设置规则: ${game.roomId}`);
       
-      broadcastToRoom(game, {
-        type: 'game_started'
-      });
-
-      // 发送初始游戏状态
-      sendGameStateToAll(game);
+      // 通知房主（playerIndex=0）可以设置规则
+      game.players[0].ws.send(JSON.stringify({
+        type: 'setup_rules',
+        isHost: true
+      }));
+      
+      // 通知访客（playerIndex=1）等待规则
+      game.players[1].ws.send(JSON.stringify({
+        type: 'setup_rules',
+        isHost: false
+      }));
     }
   } else {
     ws.send(JSON.stringify({
@@ -248,7 +329,8 @@ function handleRejoinGame(ws, newPlayerId, roomId, oldPlayerId) {
     ws.send(JSON.stringify({
       type: 'rejoin_success',
       roomId: roomId,
-      playerIndex: playerIndex
+      playerIndex: playerIndex,
+      gameRules: game.gameRules
     }));
     
     // 通知对手
@@ -274,6 +356,34 @@ function handleRejoinGame(ws, newPlayerId, roomId, oldPlayerId) {
       message: '房间不存在或已过期，请重新匹配'
     }));
   }
+}
+
+function handleStartGame(playerId, gameRules = {}) {
+  const game = findGameByPlayer(playerId);
+  if (!game) return;
+  
+  // 只有房主（playerIndex=0）可以开始游戏
+  const playerIdx = game.getPlayerIndex(playerId);
+  if (playerIdx !== 0) {
+    const player = game.players.find(p => p.id === playerId);
+    if (player) {
+      player.ws.send(JSON.stringify({ type: 'error', message: '只有房主可以设置规则' }));
+    }
+    return;
+  }
+  
+  // 应用规则并开始
+  game.applyRules(gameRules);
+  game.startGame();
+  console.log(`游戏开始: ${game.roomId}，规则:`, gameRules);
+  
+  // 把规则广播给双方，再开始
+  broadcastToRoom(game, {
+    type: 'game_started',
+    gameRules: gameRules
+  });
+  
+  sendGameStateToAll(game);
 }
 
 function handlePlayCard(playerId, cardId) {

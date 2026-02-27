@@ -13,6 +13,7 @@ let maxReconnectAttempts = 3;
 let reconnectTimeout = null;
 let cardStyle = 'text'; // 'text', 'numbers', 'noNumbers'
 let tooltipElement = null; // Tooltip元素
+let pendingAction = null; // 连接后要执行的动作: {type: 'join'|'create'|'join_room', roomCode?}
 
 // 类型图标和中文名称映射
 const typeIcons = {
@@ -45,8 +46,7 @@ function connectWebSocket() {
 
   ws.onopen = () => {
     updateStatus('已连接，正在匹配...', 'connected');
-    // 连接成功后立即加入游戏
-    joinGame();
+    // joinGame 在收到 connected 消息（含 playerId）后调用
   };
 
   ws.onmessage = (event) => {
@@ -74,7 +74,17 @@ function handleMessage(message) {
   switch (message.type) {
     case 'connected':
       playerId = message.playerId;
-      // 连接后不立即加入，等待用户设置规则后手动点击按钮
+      // 根据用户选择的入口执行对应动作
+      if (pendingAction) {
+        if (pendingAction.type === 'join') {
+          joinGame();
+        } else if (pendingAction.type === 'create') {
+          sendMessage({ type: 'create_room' });
+        } else if (pendingAction.type === 'join_room') {
+          sendMessage({ type: 'join_room', roomCode: pendingAction.roomCode });
+        }
+        pendingAction = null;
+      }
       break;
 
     case 'joined_game':
@@ -89,15 +99,43 @@ function handleMessage(message) {
       if (message.reconnected) {
         updateStatus('重新连接成功！', 'playing');
         showGameScreen();
+        if (message.gameRules) showRulesSummary(message.gameRules);
       } else {
         updateStatus(`等待对手... (${message.playersCount}/2)`, 'waiting');
-        // 显示等待界面
-        showWaitingRoom();
+        // 显示等待状态
+        showWaitingPanel();
       }
       break;
 
     case 'player_joined':
-      updateStatus(`玩家已加入 (${message.playersCount}/2)`, 'waiting');
+      updateStatus(`对手已加入，等待规则设置... (${message.playersCount}/2)`, 'waiting');
+      break;
+
+    case 'room_created':
+      roomId = message.roomId;
+      playerIndex = message.playerIndex;
+      localStorage.setItem('hanafuda_roomId', roomId);
+      localStorage.setItem('hanafuda_playerId', playerId);
+      localStorage.setItem('hanafuda_playerIndex', playerIndex);
+      updateStatus('私密房间已创建，等待对手...', 'waiting');
+      showWaitingPanel(message.roomCode);
+      break;
+
+    case 'join_room_failed':
+      updateStatus('', '');
+      // 关闭这次连接，回到主页
+      if (ws) { ws.onclose = null; ws.close(); ws = null; }
+      showJoinRoomError(message.message);
+      break;
+
+    case 'setup_rules':
+      // 双方到齐，进入规则设置阶段
+      showRulesSetupPanel(message.isHost);
+      if (message.isHost) {
+        updateStatus('请设置游戏规则', 'waiting');
+      } else {
+        updateStatus('等待房主设置规则...', 'waiting');
+      }
       break;
 
     case 'game_started':
@@ -106,6 +144,8 @@ function handleMessage(message) {
       // 重置卡牌追踪
       previousFieldCardIds = new Set();
       previousCaptureCardIds = { player: new Set(), opponent: new Set() };
+      // 显示规则摘要
+      if (message.gameRules) showRulesSummary(message.gameRules);
       break;
 
     case 'game_state':
@@ -217,6 +257,7 @@ function handleMessage(message) {
       playerIndex = message.playerIndex;
       updateStatus('重新连接成功！', 'playing');
       showGameScreen();
+      if (message.gameRules) showRulesSummary(message.gameRules);
       reconnectAttempts = 0;
       break;
     
@@ -243,20 +284,8 @@ function handleMessage(message) {
 
 // 加入游戏
 function joinGame() {
-  // 获取游戏规则设置
-  const gameRules = {
-    enableHanamiTsukimi: document.getElementById('rule-hanami-tsukimi')?.checked ?? true,
-    firstPlayerRule: document.getElementById('rule-first-player')?.value ?? 'rotate',
-    koikoiMultiplierRule: document.getElementById('rule-koikoi-multiplier')?.value ?? 'self'
-  };
-  
-  console.log('发送游戏规则:', gameRules);
-  
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      type: 'join_game',
-      gameRules: gameRules
-    }));
+    ws.send(JSON.stringify({ type: 'join_game' }));
   }
 }
 
@@ -338,19 +367,72 @@ function updateStatus(text, status) {
 
 // 显示游戏界面
 function showGameScreen() {
-  document.getElementById('rules-setup-screen').style.display = 'none';
   document.getElementById('waiting-room').style.display = 'none';
   document.getElementById('game-screen').style.display = 'block';
 }
 
-// 显示等待房间
+// 显示等待室（匹配中）
 function showWaitingRoom() {
-  document.getElementById('rules-setup-screen').style.display = 'none';
   document.getElementById('waiting-room').style.display = 'block';
   document.getElementById('game-screen').style.display = 'none';
 }
 
-// 更新游戏状态
+// 进入等待对手状态（隐藏开始按钮，显示spinner）
+function showWaitingPanel(roomCode) {
+  document.getElementById('pre-match-panel').style.display = 'none';
+  document.getElementById('waiting-panel').style.display = 'block';
+  document.getElementById('rules-setup-panel').style.display = 'none';
+
+  const codeDisplay = document.getElementById('room-code-display');
+  if (roomCode) {
+    document.getElementById('room-code-value').textContent = roomCode;
+    codeDisplay.style.display = 'block';
+  } else {
+    codeDisplay.style.display = 'none';
+  }
+}
+
+// 显示加入房间失败提示
+function showJoinRoomError(msg) {
+  const input = document.getElementById('join-room-input');
+  const existing = document.getElementById('join-room-error');
+  if (existing) existing.remove();
+  const err = document.createElement('div');
+  err.id = 'join-room-error';
+  err.className = 'join-room-error';
+  err.textContent = msg || '加入失败';
+  input.parentElement.appendChild(err);
+  setTimeout(() => err.remove(), 3000);
+}
+
+// 进入规则设置阶段
+function showRulesSetupPanel(isHost) {
+  document.getElementById('pre-match-panel').style.display = 'none';
+  document.getElementById('waiting-panel').style.display = 'none';
+  document.getElementById('rules-setup-panel').style.display = 'block';
+
+  // 规则控件：房主可编辑，访客只读
+  const inputs = document.querySelectorAll('#rules-setup-panel input, #rules-setup-panel select');
+  inputs.forEach(el => { el.disabled = !isHost; });
+
+  document.getElementById('confirm-rules-btn').style.display = isHost ? 'block' : 'none';
+  document.getElementById('guest-waiting-rules').style.display = isHost ? 'none' : 'block';
+  document.getElementById('rules-panel-title').textContent = isHost ? '游戏规则设置（你是房主）' : '游戏规则（房主设置中）';
+}
+
+// 在游戏界面右侧面板显示本局规则摘要
+function showRulesSummary(gameRules) {
+  const firstPlayerText = { rotate: '轮换', winner: '赢家先手', loser: '输家先手' };
+  const koikoiText = { self: '自己+1', opponent: '对方+1', none: '不加倍' };
+
+  document.getElementById('rules-summary-content').innerHTML = `
+    <div>花见/月见酒：${gameRules.enableHanamiTsukimi ? '启用' : '禁用'}</div>
+    <div>先手规则：${firstPlayerText[gameRules.firstPlayerRule] || gameRules.firstPlayerRule}</div>
+    <div>Koi-Koi倍数：${koikoiText[gameRules.koikoiMultiplierRule] || gameRules.koikoiMultiplierRule}</div>
+  `;
+  document.getElementById('rules-summary').style.display = 'block';
+}
+
 function updateGameState(state) {
   gameState = state;
   currentTurnPhase = state.turnPhase;
@@ -399,14 +481,14 @@ function updateGameState(state) {
     displayCurrentYakus('opponent', []);
   }
   
-  // 处理需要选择场牌的情况
+  // 处理需要选择场牌的情况（包括重连恢复）
   if (state.currentPlayerIndex === state.playerIndex) {
-    if (state.turnPhase === 'select_hand_field' && state.field.length > 0) {
-      // 需要从服务器消息中获取匹配的牌
-      // 这里先不自动显示，等待服务器的card_played消息
-    } else if (state.turnPhase === 'select_deck_field' && state.field.length > 0) {
-      // 需要从服务器消息中获取匹配的牌
-      // 这里先不自动显示，等待服务器的deck_drawn消息
+    const modal = document.getElementById('select-field-modal');
+    const modalVisible = modal && modal.style.display === 'flex';
+    if (state.turnPhase === 'select_hand_field' && state.matchedFieldCards && state.matchedFieldCards.length > 0 && !modalVisible) {
+      showFieldCardSelection(state.matchedFieldCards, false);
+    } else if (state.turnPhase === 'select_deck_field' && state.matchedFieldCards && state.matchedFieldCards.length > 0 && !modalVisible) {
+      showFieldCardSelection(state.matchedFieldCards, true);
     }
   }
   
@@ -856,35 +938,50 @@ function hideRoundEndModal() {
 function setupEventListeners() {
   // 开始匹配按钮
   document.getElementById('start-matchmaking-btn').addEventListener('click', () => {
-    // 保存规则到本地变量
-    const rulesDisplay = document.getElementById('selected-rules');
-    const enableHanamiTsukimi = document.getElementById('rule-hanami-tsukimi').checked;
-    const firstPlayerRule = document.getElementById('rule-first-player').value;
-    const koikoiMultiplierRule = document.getElementById('rule-koikoi-multiplier').value;
-    
-    // 显示已选择的规则
-    const firstPlayerText = {
-      'rotate': '轮换（每回合交替）',
-      'winner': '赢的先手',
-      'loser': '输的先手'
-    }[firstPlayerRule];
-    
-    const koikoiText = {
-      'self': '自己倍数+1',
-      'opponent': '对方倍数+1',
-      'none': '都不加倍'
-    }[koikoiMultiplierRule];
-    
-    rulesDisplay.innerHTML = `
-      <div><strong>已选择的规则：</strong></div>
-      <div>• 花见酒/月见酒：${enableHanamiTsukimi ? '启用' : '禁用'}</div>
-      <div>• 先手规则：${firstPlayerText}</div>
-      <div>• こいこい倍数：${koikoiText}</div>
-    `;
-    
-    // 连接WebSocket并开始匹配
     updateStatus('连接中...', 'connecting');
+    showWaitingPanel();
+    document.getElementById('waiting-message').textContent = '正在匹配...';
+    pendingAction = { type: 'join' };
     connectWebSocket();
+  });
+
+  // 创建私密房间按钮
+  document.getElementById('create-room-btn').addEventListener('click', () => {
+    updateStatus('连接中...', 'connecting');
+    showWaitingPanel();
+    document.getElementById('waiting-message').textContent = '正在创建房间...';
+    pendingAction = { type: 'create' };
+    connectWebSocket();
+  });
+
+  // 加入私密房间按钮
+  document.getElementById('join-room-btn').addEventListener('click', () => {
+    const code = document.getElementById('join-room-input').value.trim().toUpperCase();
+    if (!code) {
+      showJoinRoomError('请输入房间号');
+      return;
+    }
+    updateStatus('连接中...', 'connecting');
+    // 不提前切换界面，等服务器确认后再切
+    pendingAction = { type: 'join_room', roomCode: code };
+    connectWebSocket();
+  });
+
+  // 房间号输入框回车
+  document.getElementById('join-room-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('join-room-btn').click();
+  });
+
+  // 房主确认规则按钮
+  document.getElementById('confirm-rules-btn').addEventListener('click', () => {
+    const gameRules = {
+      enableHanamiTsukimi: document.getElementById('rule-hanami-tsukimi').checked,
+      firstPlayerRule: document.getElementById('rule-first-player').value,
+      koikoiMultiplierRule: document.getElementById('rule-koikoi-multiplier').value
+    };
+    sendMessage({ type: 'start_game', gameRules });
+    document.getElementById('confirm-rules-btn').disabled = true;
+    document.getElementById('confirm-rules-btn').textContent = '等待游戏开始...';
   });
   
   // Koi-Koi 继续按钮

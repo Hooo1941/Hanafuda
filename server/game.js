@@ -37,6 +37,16 @@ class HanafudaGame {
     this.initializeDeck();
   }
 
+  // 应用游戏规则（双方到齐后由房主设置）
+  applyRules(gameRules = {}) {
+    this.gameRules = {
+      enableHanamiTsukimi: gameRules.enableHanamiTsukimi !== false,
+      firstPlayerRule: gameRules.firstPlayerRule || 'rotate',
+      koikoiMultiplierRule: gameRules.koikoiMultiplierRule || 'self'
+    };
+    console.log('游戏规则已应用:', this.gameRules);
+  }
+
   // 按月份排序
   sortByMonth(cards) {
     return cards.sort((a, b) => {
@@ -919,7 +929,9 @@ class HanafudaGame {
       currentYakus: this.currentYakus,
       roundNumber: this.roundNumber,
       firstPlayerIndex: this.firstPlayerIndex,
-      actionHistory: this.actionHistory
+      actionHistory: this.actionHistory,
+      matchedFieldCards: this.matchedFieldCards,
+      drawnCard: this.drawnCard
     };
   }
 }
