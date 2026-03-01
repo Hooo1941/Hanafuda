@@ -43,6 +43,20 @@ function cleanupExpiredReconnectRooms() {
   for (const [roomId, data] of reconnectRooms.entries()) {
     if (now - data.timestamp > RECONNECT_TIMEOUT) {
       console.log(`重连超时，删除房间: ${roomId}`);
+      
+      // 通知还在线的玩家：对手已超时，房间关闭
+      const game = data.game;
+      const disconnectedIndex = data.disconnectedPlayerIndex;
+      const remainingIndex = 1 - disconnectedIndex;
+      const remainingPlayer = game.players[remainingIndex];
+      if (remainingPlayer && remainingPlayer.ws && remainingPlayer.ws.readyState === WebSocket.OPEN) {
+        remainingPlayer.ws.send(JSON.stringify({
+          type: 'room_closed',
+          reason: 'opponent_timeout',
+          message: '对手重连超时，游戏已结束'
+        }));
+      }
+      
       reconnectRooms.delete(roomId);
     }
   }
@@ -76,6 +90,10 @@ wss.on('connection', (ws) => {
   const playerId = generateId();
   console.log(`玩家连接: ${playerId}`);
 
+  // 心跳检测：标记连接存活
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+
   ws.on('message', (data) => {
     try {
       const message = JSON.parse(data);
@@ -96,6 +114,22 @@ wss.on('connection', (ws) => {
     type: 'connected', 
     playerId: playerId 
   }));
+});
+
+// WebSocket 心跳检测：每30秒 ping 所有连接，未响应的视为死连接并关闭
+const heartbeatInterval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) {
+      console.log('心跳超时，关闭死连接');
+      return ws.terminate();
+    }
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
+
+wss.on('close', () => {
+  clearInterval(heartbeatInterval);
 });
 
 function handleMessage(ws, playerId, message) {
@@ -205,58 +239,9 @@ function handleJoinRoom(ws, playerId, roomCode) {
 }
 
 function handleJoinGame(ws, playerId, gameRules = {}) {
-  // 优先查找等待重连的房间
-  let reconnectData = null;
-  for (const [roomId, data] of reconnectRooms.entries()) {
-    reconnectData = data;
-    reconnectRooms.delete(roomId); // 从重连池中移除
-    console.log(`匹配到等待重连的房间: ${roomId}`);
-    break;
-  }
-
-  if (reconnectData) {
-    // 匹配到等待重连的房间
-    const game = reconnectData.game;
-    const emptyPlayerIndex = reconnectData.disconnectedPlayerIndex;
-    
-    // 添加新玩家到空位
-    game.players[emptyPlayerIndex] = { id: playerId, ws: ws };
-    games.set(game.roomId, game); // 重新放入活跃游戏池
-    
-    console.log(`玩家 ${playerId} 加入等待重连的房间 ${game.roomId}，占据位置 ${emptyPlayerIndex}`);
-    
-    // 通知新玩家
-    ws.send(JSON.stringify({
-      type: 'joined_game',
-      roomId: game.roomId,
-      playerIndex: emptyPlayerIndex,
-      playersCount: 2,
-      reconnected: true,
-      gameRules: game.gameRules
-    }));
-    
-    // 通知另一位玩家对手已回来
-    const otherPlayerIndex = 1 - emptyPlayerIndex;
-    const otherPlayer = game.players[otherPlayerIndex];
-    if (otherPlayer && otherPlayer.ws.readyState === WebSocket.OPEN) {
-      otherPlayer.ws.send(JSON.stringify({
-        type: 'opponent_reconnected',
-        message: '对手已重新连接'
-      }));
-    }
-    
-    // 游戏恢复进行
-    broadcastToRoom(game, {
-      type: 'game_resumed'
-    });
-    
-    // 发送当前游戏状态给所有玩家
-    sendGameStateToAll(game);
-    
-    return;
-  }
+  // 只查找等待中的公开游戏（不匹配重连池，重连必须通过 rejoin_game）
   
-  // 没有等待重连的房间，查找等待中的公开游戏或创建新游戏
+  // 查找等待中的公开游戏或创建新游戏
   let game = Array.from(games.values()).find(g => g.gameState === 'waiting' && g.players.length < 2 && !g.isPrivate);
 
   if (!game) {
@@ -315,8 +300,18 @@ function handleRejoinGame(ws, newPlayerId, roomId, oldPlayerId) {
   if (reconnectData) {
     const game = reconnectData.game;
     const playerIndex = reconnectData.disconnectedPlayerIndex;
+    // 验证身份：只有原来的玩家才能重连
+    const originalPlayerId = game.players[playerIndex].id;
+    if (oldPlayerId !== originalPlayerId) {
+      console.log(`重连被拒绝：期望 ${originalPlayerId}，实际 ${oldPlayerId}`);
+      ws.send(JSON.stringify({
+        type: 'rejoin_failed',
+        message: '身份验证失败，无法重连到该房间'
+      }));
+      return;
+    }
     
-    // 更新玩家连接
+    // 验证通过，更新玩家连接
     game.players[playerIndex] = { id: newPlayerId, ws: ws };
     
     // 从重连池移除，放回活跃游戏池
@@ -583,8 +578,21 @@ function handleDisconnect(playerId) {
     
     // 如果游戏还在等待阶段（还没开始），直接删除
     if (game.gameState === 'waiting') {
+      // 通知房间内另一个玩家：对手已离开，房间关闭
+      broadcastToRoom(game, {
+        type: 'room_closed',
+        reason: 'opponent_left',
+        message: '对手已离开，房间已关闭'
+      }, playerId);
       games.delete(game.roomId);
-      console.log(`删除等待中的房间: ${game.roomId}`);
+      // 同时清理私密房间池（如果还在的话）
+      for (const [code, g] of privateRooms.entries()) {
+        if (g === game) {
+          privateRooms.delete(code);
+          break;
+        }
+      }
+      console.log(`等待阶段玩家断开，删除房间: ${game.roomId}`);
       return;
     }
     

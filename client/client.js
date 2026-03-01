@@ -77,7 +77,15 @@ function handleMessage(message) {
       // 根据用户选择的入口执行对应动作
       if (pendingAction) {
         if (pendingAction.type === 'join') {
-          joinGame();
+          // 先检查是否有未完成的游戏会话，有则尝试重连
+          const savedRoomId = localStorage.getItem('hanafuda_roomId');
+          const savedPlayerId = localStorage.getItem('hanafuda_playerId');
+          if (savedRoomId && savedPlayerId) {
+            console.log('发现未完成的游戏会话，尝试重连...');
+            sendMessage({ type: 'rejoin_game', roomId: savedRoomId, oldPlayerId: savedPlayerId });
+          } else {
+            joinGame();
+          }
         } else if (pendingAction.type === 'create') {
           sendMessage({ type: 'create_room' });
         } else if (pendingAction.type === 'join_room') {
@@ -255,6 +263,10 @@ function handleMessage(message) {
     case 'rejoin_success':
       roomId = message.roomId;
       playerIndex = message.playerIndex;
+      // 重连后 playerId 已变，更新 localStorage
+      localStorage.setItem('hanafuda_roomId', roomId);
+      localStorage.setItem('hanafuda_playerId', playerId);
+      localStorage.setItem('hanafuda_playerIndex', playerIndex);
       updateStatus('重新连接成功！', 'playing');
       showGameScreen();
       if (message.gameRules) showRulesSummary(message.gameRules);
@@ -262,18 +274,20 @@ function handleMessage(message) {
       break;
     
     case 'rejoin_failed':
-      updateStatus('重连失败，请重新匹配', 'error');
+      console.log('重连失败，回退到正常匹配');
       clearLocalStorage();
-      showInfoMessage(message.message);
-      // 返回规则设置界面
-      setTimeout(() => {
-        location.reload();
-      }, 2000);
+      // 重连失败，自动回退到正常匹配流程
+      joinGame();
       break;
 
     case 'player_disconnected':
       alert(message.message);
       window.location.reload();
+      break;
+
+    case 'room_closed':
+      alert(message.message || '房间已关闭');
+      returnToHome();
       break;
 
     case 'error':
@@ -375,6 +389,53 @@ function showGameScreen() {
 function showWaitingRoom() {
   document.getElementById('waiting-room').style.display = 'block';
   document.getElementById('game-screen').style.display = 'none';
+}
+
+// 返回主页（重置所有状态）
+function returnToHome() {
+  // 关闭现有连接
+  if (ws) {
+    ws.onclose = null; // 防止触发重连
+    ws.close();
+    ws = null;
+  }
+  
+  // 清除重连定时器
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+  
+  // 重置所有状态变量
+  playerId = null;
+  roomId = null;
+  playerIndex = null;
+  gameState = null;
+  currentTurnPhase = null;
+  previousGameState = null;
+  previousFieldCardIds = new Set();
+  previousCaptureCardIds = { player: new Set(), opponent: new Set() };
+  reconnectAttempts = 0;
+  pendingAction = null;
+  
+  // 清除 localStorage
+  clearLocalStorage();
+  
+  // 切换界面：显示等待室的 pre-match 面板
+  document.getElementById('game-screen').style.display = 'none';
+  document.getElementById('waiting-room').style.display = 'block';
+  document.getElementById('pre-match-panel').style.display = 'block';
+  document.getElementById('waiting-panel').style.display = 'none';
+  document.getElementById('rules-setup-panel').style.display = 'none';
+  
+  // 隐藏所有弹窗
+  hideFieldCardSelection();
+  const koikoiModal = document.getElementById('koikoi-modal');
+  if (koikoiModal) koikoiModal.style.display = 'none';
+  const roundEndModal = document.getElementById('round-end-modal');
+  if (roundEndModal) roundEndModal.style.display = 'none';
+  
+  updateStatus('未连接', 'disconnected');
 }
 
 // 进入等待对手状态（隐藏开始按钮，显示spinner）
